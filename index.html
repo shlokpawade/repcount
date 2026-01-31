@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>AI Gym Counter</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="app">
+  <h1>🏋️ AI Gym Counter</h1>
+
+  <div class="controls">
+    <button onclick="setExercise('squat')">Squats</button>
+    <button onclick="setExercise('pushup')">Push-ups</button>
+  </div>
+
+  <div class="stats">
+    <h2 id="exercise">Exercise: Squat</h2>
+    <h2 id="counter">Reps: 0</h2>
+    <p id="feedback">Get Ready!</p>
+  </div>
+
+  <video id="video" autoplay></video>
+  <canvas id="canvas"></canvas>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<script src="script.js"></script>
+
+</body>
+</html>
