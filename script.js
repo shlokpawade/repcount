@@ -10,36 +10,41 @@ let downFrames = 0;
 let upFrames = 0;
 let lastRepTime = 0;
 
-const STABLE_FRAMES = 10;
-const MIN_REP_TIME = 800; // ms
+let squatBaseHipY = null;
+let pushupBaseShoulderY = null;
 
+const STABLE_FRAMES = 12;     // stricter
+const MIN_REP_TIME = 900;    // ms (prevents bounce reps)
+
+// ---------------- UI ----------------
 function setExercise(type) {
   exercise = type;
   reps = 0;
   stage = "up";
   downFrames = 0;
   upFrames = 0;
+  squatBaseHipY = null;
+  pushupBaseShoulderY = null;
+
   document.getElementById("counter").innerText = "Reps: 0";
   document.getElementById("exercise").innerText =
     `Exercise: ${type === "squat" ? "Squat" : "Push-up"}`;
-  document.getElementById("feedback").innerText = "Get Ready!";
+  document.getElementById("feedback").innerText = "Get Ready";
 }
 
+// ---------------- Math Helpers ----------------
 function angle(a, b, c) {
   const ab = Math.hypot(b.x - a.x, b.y - a.y);
   const bc = Math.hypot(c.x - b.x, c.y - b.y);
   const ac = Math.hypot(c.x - a.x, c.y - a.y);
-  return Math.acos((ab*ab + bc*bc - ac*ac) / (2*ab*bc)) * 180 / Math.PI;
+  return Math.acos((ab * ab + bc * bc - ac * ac) / (2 * ab * bc)) * 180 / Math.PI;
 }
 
-function distance(a, b) {
-  return Math.hypot(a.x - b.x, a.y - b.y);
+function clamp(val, min, max) {
+  return Math.max(min, Math.min(max, val));
 }
 
-function repQuality(depthScore, stabilityScore, speedScore) {
-  return Math.round((depthScore * 0.4 + stabilityScore * 0.3 + speedScore * 0.3));
-}
-
+// ---------------- MediaPipe Pose ----------------
 const pose = new Pose({
   locateFile: file =>
     `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
@@ -65,19 +70,22 @@ pose.onResults(results => {
     const kneeAngle = angle(hip, knee, ankle);
     const hipBelowKnee = hip.y > knee.y;
 
-    // DOWN (deep squat)
-    if (kneeAngle < 90 && hipBelowKnee) {
+    if (squatBaseHipY === null) squatBaseHipY = hip.y;
+    const hipDrop = hip.y - squatBaseHipY;
+
+    // DOWN: deep squat only
+    if (kneeAngle < 90 && hipBelowKnee && hipDrop > 0.05) {
       downFrames++;
       upFrames = 0;
 
       if (downFrames >= STABLE_FRAMES && stage === "up") {
         stage = "down";
-        document.getElementById("feedback").innerText = "⬇ Deep Squat Hold";
+        document.getElementById("feedback").innerText = "⬇ Hold deep squat";
       }
     }
 
-    // UP (fully standing)
-    if (kneeAngle > 170) {
+    // UP: full extension
+    if (kneeAngle > 170 && hipDrop < 0.02) {
       upFrames++;
       downFrames = 0;
 
@@ -90,21 +98,20 @@ pose.onResults(results => {
         lastRepTime = now;
         reps++;
 
-        // QUALITY
-        const depthScore = Math.min(100, (90 - kneeAngle) * 2 + 60);
-        const stabilityScore = Math.min(100, STABLE_FRAMES * 10);
-        const speedScore = Math.min(100, (now - lastRepTime + 800) / 16);
-
-        const quality = repQuality(depthScore, stabilityScore, speedScore);
+        const depthScore = clamp((0.12 - hipDrop) * 800, 60, 100);
+        const stabilityScore = clamp(downFrames * 8, 60, 100);
+        const speedScore = clamp((now - lastRepTime) / 10, 60, 100);
+        const quality = Math.round(depthScore * 0.4 + stabilityScore * 0.3 + speedScore * 0.3);
 
         document.getElementById("counter").innerText = `Reps: ${reps}`;
-        document.getElementById("feedback").innerText =
-          `✅ Squat (${quality}% quality)`;
+        document.getElementById("feedback").innerText = `✅ Squat (${quality}%)`;
+
+        squatBaseHipY = hip.y;
       }
     }
   }
 
-  /* ===================== PUSH-UPS ===================== */
+  /* ===================== PUSH-UPS (STRICT) ===================== */
   if (exercise === "pushup") {
     const shoulder = lm[12];
     const elbow = lm[14];
@@ -114,25 +121,41 @@ pose.onResults(results => {
 
     const elbowAngle = angle(shoulder, elbow, wrist);
 
-    // Body straightness
+    // BODY STRAIGHTNESS (very strict)
     const bodyDeviation =
-      Math.abs(shoulder.y - hip.y) + Math.abs(hip.y - ankle.y);
+      Math.abs(shoulder.y - hip.y) +
+      Math.abs(hip.y - ankle.y);
 
-    const bodyStraight = bodyDeviation < 0.15;
+    const bodyStraight = bodyDeviation < 0.10;
 
-    // DOWN
-    if (elbowAngle < 85 && bodyStraight) {
+    // CHEST MOVEMENT (most important)
+    if (pushupBaseShoulderY === null) {
+      pushupBaseShoulderY = shoulder.y;
+    }
+
+    const chestDrop = shoulder.y - pushupBaseShoulderY;
+
+    // DOWN: chest must go down significantly
+    if (
+      elbowAngle < 80 &&
+      chestDrop > 0.06 &&
+      bodyStraight
+    ) {
       downFrames++;
       upFrames = 0;
 
       if (downFrames >= STABLE_FRAMES && stage === "up") {
         stage = "down";
-        document.getElementById("feedback").innerText = "⬇ Chest Down";
+        document.getElementById("feedback").innerText = "⬇ Chest down & hold";
       }
     }
 
-    // UP
-    if (elbowAngle > 170 && bodyStraight) {
+    // UP: full lockout
+    if (
+      elbowAngle > 170 &&
+      chestDrop < 0.02 &&
+      bodyStraight
+    ) {
       upFrames++;
       downFrames = 0;
 
@@ -145,20 +168,26 @@ pose.onResults(results => {
         lastRepTime = now;
         reps++;
 
-        const depthScore = Math.min(100, (85 - elbowAngle) * 3 + 60);
-        const stabilityScore = bodyStraight ? 100 : 60;
-        const speedScore = Math.min(100, (now - lastRepTime + 800) / 16);
-
-        const quality = repQuality(depthScore, stabilityScore, speedScore);
+        const depthScore = clamp((0.10 - chestDrop) * 900, 60, 100);
+        const straightScore = bodyStraight ? 100 : 60;
+        const speedScore = clamp((now - lastRepTime) / 10, 60, 100);
+        const quality = Math.round(depthScore * 0.4 + straightScore * 0.4 + speedScore * 0.2);
 
         document.getElementById("counter").innerText = `Reps: ${reps}`;
-        document.getElementById("feedback").innerText =
-          `🔥 Push-up (${quality}% quality)`;
+        document.getElementById("feedback").innerText = `🔥 Push-up (${quality}%)`;
+
+        pushupBaseShoulderY = shoulder.y;
       }
+    }
+
+    // reset baseline only when fully up & stable
+    if (elbowAngle > 175 && chestDrop < 0.01) {
+      pushupBaseShoulderY = shoulder.y;
     }
   }
 });
 
+// ---------------- Camera ----------------
 const camera = new Camera(video, {
   onFrame: async () => {
     await pose.send({ image: video });
